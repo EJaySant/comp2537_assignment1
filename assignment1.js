@@ -22,7 +22,13 @@ const mongodb_session_secret = process.env.MONGODB_SESSION_SECRET;
 const node_session_secret = process.env.NODE_SESSION_SECRET;
 
 var {database} = include("databaseConnection");
-const userCollection = database.db(mongodb_database).collection("user");
+const userCollection = database.db(mongodb_database).collection("users");
+
+function formatList(arr) {
+    if (arr.length === 0) return '';
+    if (arr.length === 1) return arr[0];
+    return arr.slice(0, -1).join(', ') + ' and ' + arr[arr.length - 1];
+}
 
 app.use(express.urlencoded({extended: false}));
 
@@ -71,7 +77,6 @@ app.get("/", (req, res) => {
     }
     else
     {
-        req.session.authorized = false;
         let mainDoc = fs.readFileSync("./app/index.html", "utf8");
         res.send(mainDoc);
     }
@@ -140,48 +145,97 @@ app.post("/signupSubmit", async (req, res) => {
     const validationResult = schema.validate({name, email, password});
     if(validationResult.error != null)
     {
-        res.redirect("/signup");
+        let missingFields = [];
+        if(!name)
+        {
+            missingFields.push("name");
+        }
+        if(!email)
+        {
+            missingFields.push("email");
+        }
+        if(!password)
+        {
+            missingFields.push("password");
+        }
+        let signUpFailHTML = `
+            <!DOCTYPE html>
+            <html>
+                <head>
+                    <title>Ervin Santiago&apos;s Assignment 1</title>
+                    <link rel="stylesheet" href="css/styles.css">
+                </head>
+                <body>
+                    <div>
+                        <p>A valid ${formatList(missingFields)} is required.</p>
+                        <a href="/signup">Try again</a>
+                    </div>
+                </body>
+            </html>
+        `;
+        res.send(signUpFailHTML);
         return;
     }
 
     var hashedPassword = await bcrypt.hash(password, saltRounds);
 
     await userCollection.insertOne({name: name, email: email, password: hashedPassword});
+    req.session.authorized = true;
+    req.session.name = name;
+    req.session.cookie.maxAge = expireTime;
 
-    res.redirect("/login");
+    res.redirect("/members");
 });
 
 app.post("/loginSubmit", async (req, res) => {
-    let loginFailDoc = fs.readFileSync("./app/loginSubmit.html", "utf8");
+    let loginFailHTML = `
+        <!DOCTYPE html>
+        <html>
+            <head>
+                <title>Ervin Santiago&apos;s Assignment 1</title>
+                <link rel="stylesheet" href="css/styles.css">
+            </head>
+            <body>
+                <div>
+                    <p>Invalid email/password combination.</p>
+                    <a href="/login">Try again</a>
+                </div>
+            </body>
+        </html>
+    `;
 
     var email = req.body.email;
     var password = req.body.password;
 
-	const schema = Joi.string().max(30).required();
-	const validationResult = schema.validate(email);
+    const schema = Joi.object(
+    {
+        email: Joi.string().max(30).required(),
+        password: Joi.string().max(20).required()
+    });
+
+	const validationResult = schema.validate({email, password});
 	if (validationResult.error != null) {
-		res.send(loginFailDoc);
+		res.send(loginFailHTML);
 	    return;
 	}
 
-	const result = await userCollection.find({email: email}).project({email: 1, password: 1, name: 1, _id: 1}).toArray();
+	const result = await userCollection.find({email: email}).project({email: 1, password: 1, name: 1}).toArray();
 
 	if (result.length != 1) {
-		res.send(loginFailDoc);
+		res.send(loginFailHTML);
 		return;
 	}
 
 	if (await bcrypt.compare(password, result[0].password)) {
 		req.session.authorized = true;
         req.session.name = result[0].name;
-		req.session.email = email;
 		req.session.cookie.maxAge = expireTime;
 
 		res.redirect("/members");
 		return;
 	}
 	else {
-		res.send(loginFailDoc);
+		res.send(loginFailHTML);
 		return;
 	}
 });
